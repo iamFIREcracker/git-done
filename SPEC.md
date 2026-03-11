@@ -34,4 +34,4 @@ Commits are sorted by author date, most recent first.
 To avoid breaking Markdown when commit content contains fence or heading markers:
 
 - **Code fences**: if the patch contains backtick runs, the outer fence uses more backticks than the longest consecutive run found (minimum 3)
-- **Headings**: if the subject or body contains lines starting with `#`, the heading prefix uses more `#` characters than the longest leading run found (minimum 3)
+- **Headings**: the commit heading is always `###`. If the body contains lines starting with `#`, those lines are escaped by prepending extra `#` characters so they nest under `###` (i.e., at least `####`)

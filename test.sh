@@ -167,9 +167,10 @@ test_headings_in_body() {
   local output
   output="$(run_git_done -1)"
 
-  # Body contains "###" so the outer heading must use at least #### (4 #'s)
-  assert_match        "heading elevated" "$output" '####[^#]'
-  assert_contains     "body present" "$output" "### Sub-heading in body"
+  # Outer heading stays ### (structure unchanged)
+  assert_contains     "heading unchanged" "$output" "### Commit with heading body"
+  # Body's ### is escaped to #### (nested under ###)
+  assert_contains     "body heading nested" "$output" "#### Sub-heading in body"
 }
 
 # ── Test 6: Both backticks and headings ───────────────────────────
@@ -191,11 +192,12 @@ test_both_escapes() {
   local output
   output="$(run_git_done -1)"
 
-  # Heading must be elevated (body has ###)
-  assert_match   "heading elevated" "$output" '####[^#]'
+  # Outer heading stays ### (structure unchanged)
+  assert_contains "heading unchanged" "$output" "### Both escapes"
+  # Body's ### is escaped to #### (nested under ###)
+  assert_contains "body heading nested" "$output" "#### Note"
   # Fence must be wider (patch has ```)
   assert_match   "fence widened" "$output" '````'
-  assert_contains "body present" "$output" "### Note"
 }
 
 # ── Run all tests ─────────────────────────────────────────────────

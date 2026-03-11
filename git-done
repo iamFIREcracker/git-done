@@ -57,16 +57,6 @@ exec ros -Q -- $0 "$@"
 (defun commit-patch (hash)
   (run (list "git" "diff-tree" "-p" "--no-commit-id" "--root" hash)))
 
-(defun max-leading-run (char text)
-  "Find the longest run of CHAR at the start of any line in TEXT."
-  (let ((max-run 0))
-    (dolist (line (uiop:split-string text :separator '(#\Newline)))
-      (let ((run (or (position-if (lambda (c) (char/= c char)) line)
-                     (length line))))
-        (when (> run max-run)
-          (setf max-run run))))
-    max-run))
-
 (defun max-consecutive-run (char text)
   "Find the longest consecutive run of CHAR anywhere in TEXT."
   (let ((max-run 0)
@@ -83,9 +73,20 @@ exec ros -Q -- $0 "$@"
   "Return a backtick fence long enough to wrap TEXT safely."
   (make-string (max 3 (1+ (max-consecutive-run #\` text))) :initial-element #\`))
 
-(defun heading-for (text)
-  "Return a # heading prefix long enough to stay above any # in TEXT."
-  (make-string (max 3 (1+ (max-leading-run #\# text))) :initial-element #\#))
+(defun escape-body-headings (body)
+  "Ensure any heading lines in BODY nest under the ### commit heading.
+Lines starting with # get extra # prepended so they have at least 4."
+  (let ((lines (uiop:split-string body :separator '(#\Newline))))
+    (format nil "~{~A~^~%~}"
+            (mapcar (lambda (line)
+                      (let ((run (or (position-if (lambda (c) (char/= c #\#)) line)
+                                     (length line))))
+                        (if (plusp run)
+                            (concatenate 'string
+                                         (make-string (max 0 (- 4 run)) :initial-element #\#)
+                                         line)
+                            line)))
+                    lines))))
 
 (defun format-commit (hash)
   "Format a single commit as markdown."
@@ -93,12 +94,11 @@ exec ros -Q -- $0 "$@"
         (date (commit-date hash))
         (body (commit-body hash))
         (patch (commit-patch hash)))
-    (let ((heading (heading-for (if body (format nil "~A~%~A" subject body) subject)))
-          (fence (fence-for patch)))
+    (let ((fence (fence-for patch)))
       (with-output-to-string (s)
-        (format s "~A ~A~%~%**~A** `~A`~%" heading subject date hash)
+        (format s "### ~A~%~%**~A** `~A`~%" subject date hash)
         (when (and body (plusp (length body)))
-          (format s "~%~A~%" body))
+          (format s "~%~A~%" (escape-body-headings body)))
         (format s "~%~Adiff~%~A~%~A" fence patch fence)))))
 
 (defun main (&rest argv)
