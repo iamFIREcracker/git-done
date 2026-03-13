@@ -8,14 +8,23 @@ exec ros -Q -- $0 "$@"
   (:use :cl))
 (in-package :git-done)
 
+(defvar *git-repo* nil
+  "When non-nil, pass -C <dir> to every git invocation.")
+
 (defun run (command)
   "Run a shell command and return its stdout as a string."
   (uiop:run-program command
                      :output '(:string :stripped t)
                      :error-output :interactive))
 
+(defun git (&rest args)
+  "Build a git command list, inserting -C *git-repo* when set."
+  (if *git-repo*
+      (list* "git" "-C" *git-repo* args)
+      (cons "git" args)))
+
 (defun git-config (key)
-  (ignore-errors (run (list "git" "config" key))))
+  (ignore-errors (run (git "config" key))))
 
 (defun git-done-author ()
   (or (uiop:getenv "GIT_DONE_AUTHOR")
@@ -33,7 +42,7 @@ exec ros -Q -- $0 "$@"
 (defun commit-refs (author extra-args)
   "Return a list of commit hashes, sorted by date descending."
   (let* ((fmt (format nil "--pretty=%ad~C%H" #\Tab))
-         (output (run `("git" "log"
+         (output (run `(,@(git "log")
                         ,(format nil "--author=~A" author)
                         ,fmt
                         "--date=iso"
@@ -46,16 +55,16 @@ exec ros -Q -- $0 "$@"
         (sort entries #'string> :key #'car)))))
 
 (defun commit-subject (hash)
-  (run (list "git" "log" "-1" "--pretty=%s" hash)))
+  (run (git "log" "-1" "--pretty=%s" hash)))
 
 (defun commit-date (hash)
-  (run (list "git" "log" "-1" "--pretty=%ad" "--date=iso" hash)))
+  (run (git "log" "-1" "--pretty=%ad" "--date=iso" hash)))
 
 (defun commit-body (hash)
-  (run (list "git" "log" "-1" "--pretty=%b" hash)))
+  (run (git "log" "-1" "--pretty=%b" hash)))
 
 (defun commit-patch (hash)
-  (run (list "git" "diff-tree" "-p" "--no-commit-id" "--root" hash)))
+  (run (git "diff-tree" "-p" "--no-commit-id" "--root" hash)))
 
 (defun max-consecutive-run (char text)
   "Find the longest consecutive run of CHAR anywhere in TEXT."
@@ -101,12 +110,24 @@ Lines starting with # get extra # prepended so they have at least 4."
           (format s "~%~A~%" (escape-body-headings body)))
         (format s "~%~Adiff~%~A~%~A" fence patch fence)))))
 
+(defun parse-argv (argv)
+  "Extract -C <dir> from ARGV, returning (values repo-dir remaining-args)."
+  (let (repo remaining)
+    (loop while argv do
+      (let ((arg (pop argv)))
+        (cond ((string= arg "-C")
+               (setf repo (pop argv)))
+              (t (push arg remaining)))))
+    (values repo (nreverse remaining))))
+
 (defun main (&rest argv)
-  (let* ((author (git-done-author))
-         (refs (commit-refs author argv)))
-    (dolist (ref refs)
-      (let ((hash (cdr ref)))
-        (write-string (format-commit hash))
-        (terpri)
-        (terpri)))))
+  (multiple-value-bind (repo extra-args) (parse-argv argv)
+    (let ((*git-repo* repo))
+      (let* ((author (git-done-author))
+             (refs (commit-refs author extra-args)))
+        (dolist (ref refs)
+          (let ((hash (cdr ref)))
+            (write-string (format-commit hash))
+            (terpri)
+            (terpri)))))))
 ;;; vim: set ft=lisp lisp:
