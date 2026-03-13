@@ -30,3 +30,42 @@ Each commit is rendered as a Markdown section with:
 - Author date and full hash
 - Commit body (if present)
 - Full diff in a fenced code block
+
+## git-done-daily
+
+A companion script that runs `git-done` for each day in a date range, writing one `YYYY-MM-DD-reponame.md` file per day (skipping days with no commits).
+
+### Usage
+
+```
+git-done-daily [options] [-- git-done-args...]
+```
+
+#### Options
+
+| Option | Description |
+|---|---|
+| `--since YYYY-MM-DD` | Start date |
+| `--until YYYY-MM-DD` | End date |
+| `--today` | Today only |
+| `--yesterday` | Yesterday only |
+| `--week` | Current week (Mon–Sun) |
+| `--month [YYYY-MM]` | Month (default: current) |
+| `--year [YYYY]` | Year (default: current) |
+| `--name NAME` | Override repo name in filenames |
+| `-C DIR` | Run in directory DIR |
+
+Everything after `--` is passed through to `git-done`.
+
+### Examples
+
+```
+# Generate daily files for the current week
+git-done-daily --week
+
+# Run against a different repo, output files land in your cwd
+git-done-daily --month 2026-02 -C ~/Workspace/other-repo
+
+# Full year with a custom name
+git-done-daily --year 2025 --name my-project -C ~/Workspace/my-project
+```

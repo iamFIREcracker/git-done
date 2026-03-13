@@ -1,0 +1,225 @@
+#!/bin/sh
+#|-*- mode:lisp -*-|#
+#|
+exec ros -Q -- $0 "$@"
+|#
+
+(defpackage :git-done-daily
+  (:use :cl))
+(in-package :git-done-daily)
+
+;;; Date utilities
+
+(defun ymd-to-ut (y m d)
+  "Encode year/month/day to universal time (noon UTC to avoid DST edge cases)."
+  (encode-universal-time 0 0 12 d m y 0))
+
+(defun ut-to-ymd (ut)
+  "Decode universal time to (values year month day)."
+  (multiple-value-bind (s min h day month year)
+      (decode-universal-time ut 0)
+    (declare (ignore s min h))
+    (values year month day)))
+
+(defun format-ymd (y m d)
+  (format nil "~4,'0D-~2,'0D-~2,'0D" y m d))
+
+(defun add-days (y m d n)
+  (ut-to-ymd (+ (ymd-to-ut y m d) (* n 86400))))
+
+(defun today-ymd ()
+  (multiple-value-bind (s min h day month year)
+      (get-decoded-time)
+    (declare (ignore s min h))
+    (values year month day)))
+
+(defun day-of-week (y m d)
+  "0=Monday, 6=Sunday."
+  (nth-value 6 (decode-universal-time (ymd-to-ut y m d) 0)))
+
+(defun last-day-of-month (y m)
+  "Return (values year month day) for the last day of the given month."
+  (if (= m 12)
+      (add-days (1+ y) 1 1 -1)
+      (add-days y (1+ m) 1 -1)))
+
+(defun ymd<= (y1 m1 d1 y2 m2 d2)
+  (<= (ymd-to-ut y1 m1 d1) (ymd-to-ut y2 m2 d2)))
+
+;;; Repo name
+
+(defun guess-repo-name ()
+  "Guess repo name from git toplevel of the current directory."
+  (let ((toplevel (ignore-errors
+                    (uiop:run-program '("git" "rev-parse" "--show-toplevel")
+                                       :output '(:string :stripped t)))))
+    (when (and toplevel (plusp (length toplevel)))
+      (car (last (pathname-directory
+                  (uiop:ensure-directory-pathname toplevel)))))))
+
+;;; Argument parsing
+
+(defun looks-like-value-p (args)
+  "Check if the next arg looks like a value (not a flag)."
+  (and args
+       (plusp (length (first args)))
+       (char/= (char (first args) 0) #\-)))
+
+(defun parse-date-arg (str)
+  "Parse YYYY-MM-DD, return (values year month day)."
+  (let ((parts (uiop:split-string str :separator '(#\-))))
+    (values (parse-integer (first parts))
+            (parse-integer (second parts))
+            (parse-integer (third parts)))))
+
+(defun parse-month-arg (str)
+  "Parse YYYY-MM, return (values year month)."
+  (let ((parts (uiop:split-string str :separator '(#\-))))
+    (values (parse-integer (first parts))
+            (parse-integer (second parts)))))
+
+(defun usage ()
+  (format *error-output* "Usage: git-done-daily [options] [-- git-done-args]~%~%")
+  (format *error-output* "Options:~%")
+  (format *error-output* "  --since YYYY-MM-DD   Start date~%")
+  (format *error-output* "  --until YYYY-MM-DD   End date~%")
+  (format *error-output* "  --today              Today only~%")
+  (format *error-output* "  --yesterday          Yesterday only~%")
+  (format *error-output* "  --week               Current week (Mon-Sun)~%")
+  (format *error-output* "  --month [YYYY-MM]    Month (default: current)~%")
+  (format *error-output* "  --year [YYYY]        Year (default: current)~%")
+  (format *error-output* "  --name NAME          Override repo name in filenames~%")
+  (format *error-output* "  -C DIR               Run in directory DIR~%")
+  (uiop:quit 1))
+
+(defun parse-args (argv)
+  "Parse arguments, splitting at --. Returns a plist."
+  (let ((pos (position "--" argv :test #'string=)))
+    (let ((own-args (if pos (subseq argv 0 pos) argv))
+          (git-done-args (if pos (subseq argv (1+ pos)) nil))
+          since-y since-m since-d until-y until-m until-d name directory)
+      (loop while own-args do
+        (let ((arg (pop own-args)))
+          (cond
+            ((string= arg "--since")
+             (unless own-args (usage))
+             (multiple-value-setq (since-y since-m since-d)
+               (parse-date-arg (pop own-args))))
+
+            ((string= arg "--until")
+             (unless own-args (usage))
+             (multiple-value-setq (until-y until-m until-d)
+               (parse-date-arg (pop own-args))))
+
+            ((string= arg "--today")
+             (multiple-value-setq (since-y since-m since-d) (today-ymd))
+             (multiple-value-setq (until-y until-m until-d) (today-ymd)))
+
+            ((string= arg "--yesterday")
+             (multiple-value-bind (y m d) (today-ymd)
+               (multiple-value-setq (since-y since-m since-d)
+                 (add-days y m d -1))
+               (multiple-value-setq (until-y until-m until-d)
+                 (add-days y m d -1))))
+
+            ((string= arg "--week")
+             (multiple-value-bind (y m d) (today-ymd)
+               (let ((dow (day-of-week y m d)))
+                 (multiple-value-setq (since-y since-m since-d)
+                   (add-days y m d (- dow)))
+                 (multiple-value-setq (until-y until-m until-d)
+                   (add-days y m d (- 6 dow))))))
+
+            ((string= arg "--month")
+             (if (looks-like-value-p own-args)
+                 (multiple-value-bind (y m) (parse-month-arg (pop own-args))
+                   (setf since-y y since-m m since-d 1)
+                   (multiple-value-setq (until-y until-m until-d)
+                     (last-day-of-month y m)))
+                 (multiple-value-bind (y m d) (today-ymd)
+                   (declare (ignore d))
+                   (setf since-y y since-m m since-d 1)
+                   (multiple-value-setq (until-y until-m until-d)
+                     (last-day-of-month y m)))))
+
+            ((string= arg "--year")
+             (if (looks-like-value-p own-args)
+                 (let ((y (parse-integer (pop own-args))))
+                   (setf since-y y since-m 1 since-d 1
+                         until-y y until-m 12 until-d 31))
+                 (let ((y (nth-value 0 (today-ymd))))
+                   (setf since-y y since-m 1 since-d 1
+                         until-y y until-m 12 until-d 31))))
+
+            ((string= arg "--name")
+             (unless own-args (usage))
+             (setf name (pop own-args)))
+
+            ((string= arg "-C")
+             (unless own-args (usage))
+             (setf directory (pop own-args)))
+
+            (t
+             (format *error-output* "git-done-daily: unknown option: ~A~%" arg)
+             (usage)))))
+
+      (unless (and since-y until-y)
+        (usage))
+
+      (list :since-y since-y :since-m since-m :since-d since-d
+            :until-y until-y :until-m until-m :until-d until-d
+            :name name :directory directory :git-done-args git-done-args))))
+
+;;; Running git-done
+
+(defun run-git-done (since-str until-str git-done-args)
+  "Run git-done for a single day range, return output string."
+  (let ((cmd (append (list "git-done"
+                           (format nil "--since=~AT00:00:00" since-str)
+                           (format nil "--until=~AT00:00:00" until-str))
+                     git-done-args)))
+    (uiop:run-program cmd
+                       :output '(:string :stripped t)
+                       :error-output :interactive)))
+
+;;; Main
+
+(defun main (&rest argv)
+  (let* ((opts (parse-args argv))
+         (since-y (getf opts :since-y))
+         (since-m (getf opts :since-m))
+         (since-d (getf opts :since-d))
+         (until-y (getf opts :until-y))
+         (until-m (getf opts :until-m))
+         (until-d (getf opts :until-d))
+         (name (getf opts :name))
+         (directory (getf opts :directory))
+         (git-done-args (getf opts :git-done-args))
+         (output-dir (uiop:getcwd)))
+
+    ;; Change to target repo directory if specified
+    (when directory
+      (uiop:chdir (uiop:ensure-directory-pathname directory)))
+
+    ;; Guess repo name if not specified
+    (unless name
+      (setf name (or (guess-repo-name) "repo")))
+
+    ;; Iterate over each day in the range
+    (let ((cy since-y) (cm since-m) (cd since-d))
+      (loop while (ymd<= cy cm cd until-y until-m until-d) do
+        (multiple-value-bind (ny nm nd) (add-days cy cm cd 1)
+          (let* ((since-str (format-ymd cy cm cd))
+                 (until-str (format-ymd ny nm nd))
+                 (output (run-git-done since-str until-str git-done-args)))
+            (when (and output (plusp (length output)))
+              (let ((filepath (merge-pathnames
+                               (format nil "~A-~A.md" since-str name)
+                               output-dir)))
+                (with-open-file (s filepath :direction :output
+                                           :if-exists :supersede)
+                  (write-string output s)
+                  (terpri s))
+                (format t "~A~%" (file-namestring filepath)))))
+          (setf cy ny cm nm cd nd))))))
+;;; vim: set ft=lisp lisp:
