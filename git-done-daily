@@ -66,11 +66,19 @@ exec ros -Q -- $0 "$@"
        (char/= (char (first args) 0) #\-)))
 
 (defun parse-date-arg (str)
-  "Parse YYYY-MM-DD, return (values year month day)."
+  "Parse YYYY-MM-DD, YYYY-MM, or YYYY. Return (values year month day)."
   (let ((parts (uiop:split-string str :separator '(#\-))))
-    (values (parse-integer (first parts))
-            (parse-integer (second parts))
-            (parse-integer (third parts)))))
+    (case (length parts)
+      (3 (values (parse-integer (first parts))
+                 (parse-integer (second parts))
+                 (parse-integer (third parts))))
+      (2 (values (parse-integer (first parts))
+                 (parse-integer (second parts))
+                 1))
+      (1 (values (parse-integer (first parts))
+                 1
+                 1))
+      (otherwise (usage)))))
 
 (defun parse-month-arg (str)
   "Parse YYYY-MM, return (values year month)."
@@ -81,8 +89,8 @@ exec ros -Q -- $0 "$@"
 (defun usage ()
   (format *error-output* "Usage: git-done-daily [options] [-- git-done-args]~%~%")
   (format *error-output* "Options:~%")
-  (format *error-output* "  --since YYYY-MM-DD   Start date~%")
-  (format *error-output* "  --until YYYY-MM-DD   End date~%")
+  (format *error-output* "  --since DATE          Start date (YYYY, YYYY-MM, or YYYY-MM-DD)~%")
+  (format *error-output* "  --until DATE          End date (default: today)~%")
   (format *error-output* "  --today              Today only~%")
   (format *error-output* "  --yesterday          Yesterday only~%")
   (format *error-output* "  --week               Current week (Mon-Sun)~%")
@@ -108,8 +116,19 @@ exec ros -Q -- $0 "$@"
 
             ((string= arg "--until")
              (unless own-args (usage))
-             (multiple-value-setq (until-y until-m until-d)
-               (parse-date-arg (pop own-args))))
+             (let* ((str (pop own-args))
+                    (parts (uiop:split-string str :separator '(#\-))))
+               (case (length parts)
+                 (3 (setf until-y (parse-integer (first parts))
+                          until-m (parse-integer (second parts))
+                          until-d (parse-integer (third parts))))
+                 (2 (let ((y (parse-integer (first parts)))
+                          (m (parse-integer (second parts))))
+                      (multiple-value-setq (until-y until-m until-d)
+                        (last-day-of-month y m))))
+                 (1 (let ((y (parse-integer (first parts))))
+                      (setf until-y y until-m 12 until-d 31)))
+                 (otherwise (usage)))))
 
             ((string= arg "--today")
              (multiple-value-setq (since-y since-m since-d) (today-ymd))
@@ -163,8 +182,12 @@ exec ros -Q -- $0 "$@"
              (format *error-output* "git-done-daily: unknown option: ~A~%" arg)
              (usage)))))
 
-      (unless (and since-y until-y)
+      (unless since-y
         (usage))
+
+      ;; Default --until to today if omitted
+      (unless until-y
+        (multiple-value-setq (until-y until-m until-d) (today-ymd)))
 
       (list :since-y since-y :since-m since-m :since-d since-d
             :until-y until-y :until-m until-m :until-d until-d
