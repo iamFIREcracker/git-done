@@ -39,20 +39,71 @@ exec ros -Q -- $0 "$@"
               (subseq line (1+ tab-pos)))
         (cons "" line))))
 
+(defun parse-date-flag (prefix arg)
+  "If ARG starts with PREFIX (e.g. \"--since=\"), return the value after it; else nil."
+  (let ((len (length prefix)))
+    (when (and (>= (length arg) len)
+               (string= arg prefix :end1 len))
+      (subseq arg len))))
+
+(defun extract-date-args (extra-args)
+  "Extract --since/--until values from EXTRA-ARGS.
+Returns (values since-value until-value remaining-args)."
+  (let (since until remaining (args extra-args))
+    (loop while args do
+      (let ((arg (pop args)))
+        (cond
+          ;; --since=VALUE
+          ((parse-date-flag "--since=" arg)
+           (setf since (parse-date-flag "--since=" arg)))
+          ;; --since VALUE
+          ((string= arg "--since")
+           (setf since (pop args)))
+          ;; --until=VALUE
+          ((parse-date-flag "--until=" arg)
+           (setf until (parse-date-flag "--until=" arg)))
+          ;; --until VALUE
+          ((string= arg "--until")
+           (setf until (pop args)))
+          (t (push arg remaining)))))
+    (values since until (nreverse remaining))))
+
+(defun date-to-unix (date-str flag)
+  "Convert a date string to a unix timestamp using git rev-parse.
+FLAG is \"--since\" or \"--until\"."
+  (let* ((arg (format nil "~A=~A" flag date-str))
+         (result (run (git "rev-parse" arg)))
+         (eq-pos (position #\= result)))
+    (parse-integer (subseq result (1+ eq-pos)))))
+
 (defun commit-refs (author extra-args)
-  "Return a list of commit hashes, sorted by date descending."
-  (let* ((fmt (format nil "--pretty=%ad~C%H" #\Tab))
-         (output (run `(,@(git "log")
-                        ,(format nil "--author=~A" author)
-                        ,fmt
-                        "--date=iso"
-                        "--no-merges"
-                        ,@extra-args))))
-    (when (and output (plusp (length output)))
-      (let ((entries (mapcar #'parse-ref-line
-                             (uiop:split-string output
-                                                :separator '(#\Newline)))))
-        (sort entries #'string> :key #'car)))))
+  "Return a list of (author-unix-ts . hash), sorted by date descending.
+When --since/--until are present, filters by author date instead of committer date."
+  (multiple-value-bind (since-str until-str remaining-args)
+      (extract-date-args extra-args)
+    (let* ((since-ts (when since-str (date-to-unix since-str "--since")))
+           (until-ts (when until-str (date-to-unix until-str "--until")))
+           ;; Pass --since to git (safe lower bound) but not --until
+           (git-date-args (when since-str
+                            (list (format nil "--since=~A" since-str))))
+           (fmt (format nil "--pretty=%at~C%H" #\Tab))
+           (output (run `(,@(git "log")
+                          ,(format nil "--author=~A" author)
+                          ,fmt
+                          "--no-merges"
+                          ,@git-date-args
+                          ,@remaining-args))))
+      (when (and output (plusp (length output)))
+        (let* ((entries (mapcar #'parse-ref-line
+                                (uiop:split-string output
+                                                   :separator '(#\Newline))))
+               (filtered (remove-if-not
+                          (lambda (entry)
+                            (let ((ts (parse-integer (car entry))))
+                              (and (or (null since-ts) (>= ts since-ts))
+                                   (or (null until-ts) (< ts until-ts)))))
+                          entries)))
+          (sort filtered #'string> :key #'car))))))
 
 (defun commit-subject (hash)
   (run (git "log" "-1" "--pretty=%s" hash)))
