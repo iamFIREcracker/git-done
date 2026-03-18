@@ -200,6 +200,74 @@ test_both_escapes() {
   assert_match   "fence widened" "$output" '````'
 }
 
+# ── Test 7: Rebased commit not duplicated ────────────────────────
+
+test_rebase_dedup() {
+  echo "-- test_rebase_dedup"
+  setup_repo
+
+  # Base commit on main
+  echo "base" > file.txt
+  git add file.txt
+  GIT_AUTHOR_DATE="2025-01-14 10:00:00 +0000" \
+  GIT_COMMITTER_DATE="2025-01-14 10:00:00 +0000" \
+  git commit -q -m "Base commit"
+
+  # Feature branch with a commit authored "yesterday"
+  git checkout -q -b feature
+  echo "feature work" > feature.txt
+  git add feature.txt
+  GIT_AUTHOR_DATE="2025-01-15 10:00:00 +0000" \
+  GIT_COMMITTER_DATE="2025-01-15 10:00:00 +0000" \
+  git commit -q -m "Add feature work"
+
+  # Save the pre-rebase hash (we'll restore a ref to it after rebase)
+  local old_hash
+  old_hash="$(git rev-parse HEAD)"
+
+  # Meanwhile, main gets a new commit
+  git checkout -q main
+  echo "main work" > main.txt
+  git add main.txt
+  GIT_AUTHOR_DATE="2025-01-15 12:00:00 +0000" \
+  GIT_COMMITTER_DATE="2025-01-15 12:00:00 +0000" \
+  git commit -q -m "Main branch work"
+
+  # Rebase feature onto main — committer date becomes "today" (Jan 16)
+  git checkout -q feature
+  GIT_COMMITTER_DATE="2025-01-16 09:00:00 +0000" \
+  git rebase -q main
+
+  # Restore a ref to the old commit (simulates origin/feature before force-push)
+  git branch pre-rebase "$old_hash"
+
+  # Now both pre-rebase and feature have "Add feature work" with same patch
+  # but different hashes
+
+  # Yesterday (Jan 15): should show the commit (that's when it was authored)
+  local output_yesterday
+  output_yesterday="$(run_git_done --all --since=2025-01-15T00:00:00 --until=2025-01-16T00:00:00)"
+  assert_contains "rebase: yesterday has commit" "$output_yesterday" "Add feature work"
+
+  # Today (Jan 16): should NOT show "Add feature work" — it's just a rebase,
+  # the actual work was done yesterday
+  local output_today
+  output_today="$(run_git_done --all --since=2025-01-16T00:00:00 --until=2025-01-17T00:00:00)"
+  assert_not_contains "rebase: today should not have rebased commit" "$output_today" "Add feature work"
+
+  # Spanning range (Jan 15–17): should show "Add feature work" exactly once
+  local output_span
+  output_span="$(run_git_done --all --since=2025-01-15T00:00:00 --until=2025-01-17T00:00:00)"
+  local count
+  count="$(printf '%s' "$output_span" | grep -cF "Add feature work")"
+  if [ "$count" -eq 1 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL [rebase: spanning range should have commit exactly once]: found $count occurrences, expected 1"
+  fi
+}
+
 # ── Run all tests ─────────────────────────────────────────────────
 
 test_basic_formatting
@@ -208,6 +276,7 @@ test_backticks_in_patch
 test_backticks_in_body
 test_headings_in_body
 test_both_escapes
+test_rebase_dedup
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
