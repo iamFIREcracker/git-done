@@ -22,6 +22,8 @@ git-done --since=2025-01-01 --until=2025-02-01
 
 Commits are filtered by author (from `GIT_DONE_AUTHOR` env var or `git config user.name`) and merge commits are excluded.
 
+When `--since`/`--until` are used, commits are filtered by **author date** (when the work was done) rather than committer date, so rebased commits don't appear on the wrong day.
+
 ## Output
 
 Each commit is rendered as a Markdown section with:
@@ -45,8 +47,8 @@ git-done-daily [options] [-- git-done-args...]
 
 | Option | Description |
 |---|---|
-| `--since YYYY-MM-DD` | Start date |
-| `--until YYYY-MM-DD` | End date |
+| `--since DATE` | Start date (`YYYY`, `YYYY-MM`, or `YYYY-MM-DD`) |
+| `--until DATE` | End date (same formats; defaults to today) |
 | `--today` | Today only |
 | `--yesterday` | Yesterday only |
 | `--week` | Current week (Mon–Sun) |
