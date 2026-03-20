@@ -20,9 +20,9 @@ git-done -5
 git-done --since=2025-01-01 --until=2025-02-01
 ```
 
-Commits are filtered by author (from `GIT_DONE_AUTHOR` env var or `git config user.name`) and merge commits are excluded.
+Commits are filtered by author (from `GIT_DONE_AUTHOR` env var or `git config user.name`) and merge commits are excluded. All branches are included (`--all`), so you get everything you've done regardless of which branch it's on.
 
-When `--since`/`--until` are used, commits are filtered by **author date** (when the work was done) rather than committer date, so rebased commits don't appear on the wrong day.
+When `--since`/`--until` are used, commits are filtered by **author date** (when the work was done) rather than committer date, so rebased commits don't appear on the wrong day. Rebased duplicates are removed via `git patch-id`, keeping only the earliest occurrence of each logical change.
 
 ## Output
 

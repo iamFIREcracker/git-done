@@ -76,9 +76,43 @@ FLAG is \"--since\" or \"--until\"."
          (eq-pos (position #\= result)))
     (parse-integer (subseq result (1+ eq-pos)))))
 
+(defun commit-patch-id (hash)
+  "Return the patch-id for a commit, or nil for empty commits."
+  (let* ((diff-cmd (if *git-repo*
+                       (format nil "git -C ~A diff-tree -p --no-commit-id --root ~A"
+                               (uiop:escape-shell-token *git-repo*) hash)
+                       (format nil "git diff-tree -p --no-commit-id --root ~A" hash)))
+         (shell-cmd (format nil "~A | git patch-id --stable" diff-cmd))
+         (output (ignore-errors
+                   (uiop:run-program shell-cmd
+                                     :output '(:string :stripped t)
+                                     :error-output :interactive))))
+    ;; Output format: "<patch-id> <hash>"
+    (when (and output (plusp (length output)))
+      (subseq output 0 (position #\Space output)))))
+
+(defun dedup-by-patch-id (entries)
+  "Remove duplicate commits by patch-id, keeping the one with the oldest
+committer date (earliest appearance of the logical change)."
+  (let ((seen (make-hash-table :test #'equal))
+        (result nil))
+    ;; Sort by author-date ascending so we see oldest first
+    (dolist (entry (sort (copy-list entries) #'string< :key #'car))
+      (let* ((hash (cdr entry))
+             (pid (commit-patch-id hash)))
+        (cond
+          ((null pid)
+           ;; Empty commits have no patch-id; always keep them
+           (push entry result))
+          ((not (gethash pid seen))
+           (setf (gethash pid seen) t)
+           (push entry result)))))
+    result))
+
 (defun commit-refs (author extra-args)
   "Return a list of (author-unix-ts . hash), sorted by date descending.
-When --since/--until are present, filters by author date instead of committer date."
+When --since/--until are present, filters by author date instead of committer date.
+Deduplicates rebased commits by patch-id, keeping the oldest."
   (multiple-value-bind (since-str until-str remaining-args)
       (extract-date-args extra-args)
     (let* ((since-ts (when since-str (date-to-unix since-str "--since")))
@@ -88,6 +122,7 @@ When --since/--until are present, filters by author date instead of committer da
                             (list (format nil "--since=~A" since-str))))
            (fmt (format nil "--pretty=%at~C%H" #\Tab))
            (output (run `(,@(git "log")
+                          "--all"
                           ,(format nil "--author=~A" author)
                           ,fmt
                           "--no-merges"
@@ -102,8 +137,9 @@ When --since/--until are present, filters by author date instead of committer da
                             (let ((ts (parse-integer (car entry))))
                               (and (or (null since-ts) (>= ts since-ts))
                                    (or (null until-ts) (< ts until-ts)))))
-                          entries)))
-          (sort filtered #'string> :key #'car))))))
+                          entries))
+               (deduped (dedup-by-patch-id filtered)))
+          (sort deduped #'string> :key #'car))))))
 
 (defun commit-subject (hash)
   (run (git "log" "-1" "--pretty=%s" hash)))

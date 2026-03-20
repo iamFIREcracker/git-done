@@ -13,6 +13,11 @@ The script is implemented as a [Roswell](https://github.com/roswell/roswell) scr
   1. `GIT_DONE_AUTHOR` environment variable
   2. `git config user.name`
 - Merge commits are excluded (`--no-merges`)
+- All branches are included (`--all`)
+
+## Deduplication
+
+Rebased commits produce multiple git objects with different hashes but identical diffs. To avoid showing the same logical change multiple times, commits are deduplicated by `git patch-id --stable`. When duplicates are found, only the commit with the oldest committer date is kept (i.e., the original, not the rebase).
 
 ## Arguments
 
