@@ -76,33 +76,100 @@ FLAG is \"--since\" or \"--until\"."
          (eq-pos (position #\= result)))
     (parse-integer (subseq result (1+ eq-pos)))))
 
+(defun git-done-lookback-days ()
+  "Return the lookback window in days from GIT_DONE_LOOKBACK_DAYS, defaulting to 90."
+  (let ((env (uiop:getenv "GIT_DONE_LOOKBACK_DAYS")))
+    (if (and env (plusp (length env)))
+        (parse-integer env)
+        90)))
+
+(defun batch-patch-ids (author since-arg)
+  "Build a hash table mapping commit-hash → patch-id for all matching commits.
+SINCE-ARG is a --since=... string to pass to git log, or nil for no limit."
+  (let* ((git-prefix (if *git-repo*
+                         (format nil "git -C ~A"
+                                 (uiop:escape-shell-token *git-repo*))
+                         "git"))
+         (since-part (if since-arg
+                         (format nil " ~A"
+                                 (uiop:escape-shell-token since-arg))
+                         ""))
+         (shell-cmd (format nil "~A log --all --author=~A --no-merges~A -p | git patch-id --stable"
+                            git-prefix
+                            (uiop:escape-shell-token author)
+                            since-part))
+         (output (ignore-errors
+                   (uiop:run-program shell-cmd
+                                     :output '(:string :stripped t)
+                                     :error-output :interactive)))
+         (table (make-hash-table :test #'equal)))
+    (when (and output (plusp (length output)))
+      (dolist (line (uiop:split-string output :separator '(#\Newline)))
+        (let ((space (position #\Space line)))
+          (when space
+            (let ((pid (subseq line 0 space))
+                  (hash (subseq line (1+ space))))
+              (setf (gethash hash table) pid))))))
+    table))
+
+(defun dedup-by-patch-id (entries patch-ids)
+  "Remove duplicate commits by patch-id, keeping the one with the oldest
+committer date (earliest appearance of the logical change).
+PATCH-IDS is a hash table mapping commit-hash → patch-id."
+  (let ((seen (make-hash-table :test #'equal))
+        (result nil))
+    ;; Sort by committer-date ascending so we see oldest first
+    (dolist (entry (sort (copy-list entries) #'string< :key #'car))
+      (let* ((hash (cdr entry))
+             (pid (gethash hash patch-ids)))
+        (cond
+          ((null pid)
+           ;; Empty commits have no patch-id; always keep them
+           (push entry result))
+          ((not (gethash pid seen))
+           (setf (gethash pid seen) t)
+           (push entry result)))))
+    result))
+
 (defun commit-refs (author extra-args)
-  "Return a list of (author-unix-ts . hash), sorted by date descending.
-When --since/--until are present, filters by author date instead of committer date."
+  "Return a list of (committer-unix-ts . hash), sorted by committer date descending.
+Buckets by committer date so that amended commits appear on the day they were amended.
+Uses a lookback window (GIT_DONE_LOOKBACK_DAYS, default 90) to fetch older commits
+for patch-id deduplication, then filters survivors to the user's --since/--until range."
   (multiple-value-bind (since-str until-str remaining-args)
       (extract-date-args extra-args)
     (let* ((since-ts (when since-str (date-to-unix since-str "--since")))
            (until-ts (when until-str (date-to-unix until-str "--until")))
-           ;; Pass --since to git (safe lower bound) but not --until
-           (git-date-args (when since-str
-                            (list (format nil "--since=~A" since-str))))
-           (fmt (format nil "--pretty=%at~C%H" #\Tab))
+           (lookback-days (git-done-lookback-days))
+           (lookback-since-ts (when since-ts
+                                 (- since-ts (* lookback-days 86400))))
+           ;; Pass lookback --since to git (broader window for dedup)
+           (git-date-args (when lookback-since-ts
+                            (list (format nil "--since=@~A" lookback-since-ts))))
+           (since-arg (when lookback-since-ts
+                        (format nil "--since=@~A" lookback-since-ts)))
+           (fmt (format nil "--pretty=%ct~C%H" #\Tab))
            (output (run `(,@(git "log")
+                          "--all"
                           ,(format nil "--author=~A" author)
                           ,fmt
                           "--no-merges"
                           ,@git-date-args
-                          ,@remaining-args))))
+                          ,@remaining-args)))
+           (patch-ids (batch-patch-ids author since-arg)))
       (when (and output (plusp (length output)))
         (let* ((entries (mapcar #'parse-ref-line
                                 (uiop:split-string output
                                                    :separator '(#\Newline))))
+               ;; Dedup BEFORE filtering to user's range
+               (deduped (dedup-by-patch-id entries patch-ids))
+               ;; Filter survivors to user's --since/--until range
                (filtered (remove-if-not
                           (lambda (entry)
                             (let ((ts (parse-integer (car entry))))
                               (and (or (null since-ts) (>= ts since-ts))
                                    (or (null until-ts) (< ts until-ts)))))
-                          entries)))
+                          deduped)))
           (sort filtered #'string> :key #'car))))))
 
 (defun commit-subject (hash)
