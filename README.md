@@ -35,6 +35,18 @@ Each commit is rendered as a Markdown section with:
 - Commit body (if present)
 - Full diff in a fenced code block
 
+## Excluding files from diffs
+
+Some files (binaries, generated data, lock files) produce noisy diffs. You can suppress their patch output using git's built-in `-diff` attribute in `.gitattributes` or `.git/info/attributes`:
+
+```gitattributes
+package-lock.json -diff
+*.pdf -diff
+data/*.csv -diff
+```
+
+Files marked `-diff` will show a short `Binary files differ` line instead of a full patch. This applies to all git diff operations, not just `git-done`.
+
 ## git-done-daily
 
 A companion script that runs `git-done` for each day in a date range, writing one `YYYY-MM-DD-reponame.md` file per day (skipping days with no commits).
