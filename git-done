@@ -183,7 +183,7 @@ for patch-id deduplication, then filters survivors to the user's --since/--until
   (run (git "log" "-1" "--pretty=%b" hash)))
 
 (defun commit-patch (hash)
-  (run (git "diff-tree" "-p" "--no-commit-id" "--root" hash)))
+  (run (git "diff-tree" "-p" "--irreversible-delete" "--no-commit-id" "--root" hash)))
 
 (defun max-consecutive-run (char text)
   "Find the longest consecutive run of CHAR anywhere in TEXT."
