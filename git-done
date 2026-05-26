@@ -15,6 +15,7 @@ exec ros -Q -- $0 "$@"
   "Run a shell command and return its stdout as a string."
   (uiop:run-program command
                      :output '(:string :stripped t)
+                     :external-format '(:utf-8 :replacement #\?)
                      :error-output :interactive))
 
 (defun git (&rest args)
